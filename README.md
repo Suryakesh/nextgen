@@ -158,6 +158,27 @@ optional `Credit` (token ID, tx hash).
 
 ---
 
+## Security
+
+- Secrets (`PINATA_JWT`, `SENTINELHUB_CLIENT_ID`/`SECRET`, `OPENAI_API_KEY`,
+  `ALCHEMY_RPC_URL`, `POSTGRES_URL`, `DIRECT_URL`) are loaded from environment
+  variables only — never committed. `.env` is gitignored; only `.env.example` (no
+  real values) is tracked.
+- All third-party API calls (Pinata, Sentinel Hub, OpenAI, Alchemy RPC) happen
+  server-side in API routes — no client-side code ever holds a real credential.
+- Wallet addresses are validated with a strict 0x-prefixed 40-hex-character check
+  before any database write (see `app/api/submit/route.ts`).
+- Mint idempotency: a submission's `tx_hash` is persisted before the mint
+  transaction is awaited, preventing double-mints on retry (see
+  `app/api/mint/[submissionId]/route.ts`).
+- Every submission's IPFS hash is content-addressed (Pinata/IPFS) — the photo
+  itself cannot be silently swapped after submission without changing the hash.
+- Known gap: no per-workspace secret rotation tooling yet (single-tenant
+  deployment, manual rotation via each provider's dashboard). See
+  `LIMITATIONS.md`.
+
+---
+
 ## Getting Started
 
 ### Prerequisites
