@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { corsHeaders, handleOptions } from "@/lib/cors";
 import prisma from "@/lib/prisma";
 import { ethers } from "ethers";
+import { logAuditEvent } from "@/lib/audit";
 
 const MINIMAL_ABI = [
   "function mintCredit(address to, string memory uri) external returns (uint256)",
@@ -21,6 +22,13 @@ export async function POST(
   const { submissionId } = params;
   const origin = req.headers.get("origin");
   const headers = corsHeaders(origin);
+
+  // Tracked outside the try block so the outer catch can tell whether a real
+  // mint attempt was already logged (and therefore needs a matching
+  // "mint_failed" entry) versus a failure that happened before any attempt
+  // (e.g. submission not found, insufficient balance) which has nothing to
+  // pair it with.
+  let mintAttemptLogged = false;
 
   try {
     // 1. Load Submission by submissionId (including user and credit relations)
@@ -117,6 +125,16 @@ export async function POST(
 
     const contract = new ethers.Contract(contractAddress, MINIMAL_ABI, wallet);
 
+    // Log the attempt right before the on-chain call — the idempotent
+    // double-mint short-circuit above returns before this point, so it never
+    // produces a spurious "attempted" entry.
+    await logAuditEvent({
+      submissionId: submission.id,
+      action: "mint_attempted",
+      actor: "system",
+    });
+    mintAttemptLogged = true;
+
     // Call mintCredit(address to, string uri)
     const tx = await contract.mintCredit(submission.user.wallet_address, submission.photo_url);
 
@@ -152,6 +170,12 @@ export async function POST(
             `${deleteErr.message || String(deleteErr)}`
         );
       }
+      await logAuditEvent({
+        submissionId: submission.id,
+        action: "mint_failed",
+        actor: "system",
+        detail: { error: "Mint transaction failed or reverted on-chain.", tx_hash: tx.hash },
+      });
       return NextResponse.json(
         { error: "Mint transaction failed or reverted on-chain." },
         { status: 500, headers }
@@ -188,6 +212,12 @@ export async function POST(
       console.error(
         `[mint] failed: could not parse token ID from receipt for confirmed tx ${tx.hash} (submission '${submissionId}')`
       );
+      await logAuditEvent({
+        submissionId: submission.id,
+        action: "mint_failed",
+        actor: "system",
+        detail: { error: "Could not parse token ID from mint transaction receipt.", tx_hash: tx.hash },
+      });
       return NextResponse.json(
         { error: "Could not parse token ID from mint transaction receipt." },
         { status: 500, headers }
@@ -207,6 +237,16 @@ export async function POST(
         `[mint] CRITICAL: tx ${receipt.hash} confirmed on-chain with token_id ${tokenIdStr} for submission ` +
           `'${submissionId}' but failed to persist token_id: ${persistErr.message || String(persistErr)}`
       );
+      await logAuditEvent({
+        submissionId: submission.id,
+        action: "mint_failed",
+        actor: "system",
+        detail: {
+          error: `Mint confirmed on-chain but failed to save to the database: ${persistErr.message || String(persistErr)}`,
+          tx_hash: receipt.hash,
+          token_id: tokenIdStr,
+        },
+      });
       return NextResponse.json(
         {
           error: `Mint confirmed on-chain (tx ${receipt.hash}, token ${tokenIdStr}) but failed to save to the database.`,
@@ -217,7 +257,15 @@ export async function POST(
 
     const explorer_url = `https://amoy.polygonscan.com/tx/${receipt.hash}`;
 
-    // 8. Return 200 JSON
+    // 8. Log the audit trail entry (non-critical — never blocks the response)
+    await logAuditEvent({
+      submissionId: submission.id,
+      action: "mint_succeeded",
+      actor: "system",
+      detail: { tx_hash: credit.tx_hash, token_id: credit.token_id },
+    });
+
+    // 9. Return 200 JSON
     return NextResponse.json(
       {
         token_id: credit.token_id,
@@ -228,6 +276,14 @@ export async function POST(
     );
   } catch (error: any) {
     console.error("[mint] failed: unexpected error", error);
+    if (mintAttemptLogged) {
+      await logAuditEvent({
+        submissionId,
+        action: "mint_failed",
+        actor: "system",
+        detail: { error: error?.message || String(error) },
+      });
+    }
     return NextResponse.json(
       { error: error?.message || "Internal server error during minting." },
       { status: 500, headers }

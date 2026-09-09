@@ -36,6 +36,7 @@ model Submission {
   created_at           DateTime         @default(now())
   verification         Verification?
   credit               Credit?
+  audit_events         AuditEvent[]
 
   @@index([status])
   @@index([user_id])
@@ -58,4 +59,20 @@ model Credit {
   token_id      String?
   tx_hash       String?
   minted_at     DateTime   @default(now())
+}
+
+model AuditEvent {
+  id            String     @id @default(uuid()) @db.Uuid
+  submission_id String     @db.Uuid
+  submission    Submission @relation(fields: [submission_id], references: [id])
+  action        String   // e.g. "submission_created", "verification_passed",
+                          // "verification_failed", "mint_attempted", "mint_succeeded",
+                          // "mint_failed"
+  actor         String?  // wallet address if known, "system" if automated
+  detail        Json?    // structured extra context: ndvi_score, photo_confidence,
+                          // reasoning, tx_hash, error message, etc.
+  created_at    DateTime @default(now())
+
+  @@index([submission_id])
+  @@index([action])
 }

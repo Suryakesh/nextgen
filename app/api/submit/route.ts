@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { corsHeaders, handleOptions } from "@/lib/cors";
+import { logAuditEvent } from "@/lib/audit";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export const maxDuration = 60;
 
@@ -11,6 +13,20 @@ export async function OPTIONS(request: Request) {
 export async function POST(request: Request) {
   const origin = request.headers.get("origin");
   const headers = corsHeaders(origin);
+
+  // Rate limit before any work (IPFS upload, DB write) is done. Vercel sets
+  // x-forwarded-for to the client IP; fall back to "unknown" so unattributable
+  // requests still share a single (shared, more restrictive) bucket rather
+  // than bypassing the limit entirely.
+  const rateLimitKey = request.headers.get("x-forwarded-for") || "unknown";
+  const rateLimit = checkRateLimit(rateLimitKey, 5, 60_000);
+  if (!rateLimit.allowed) {
+    console.error(`[verify] submit rejected: rate limit exceeded for key '${rateLimitKey}'`);
+    return NextResponse.json(
+      { error: "Rate limit exceeded. Try again in a minute." },
+      { status: 429, headers }
+    );
+  }
 
   try {
     const formData = await request.formData();
@@ -176,7 +192,15 @@ export async function POST(request: Request) {
       );
     }
 
-    // 8. Return successful response
+    // 8. Log the audit trail entry (non-critical — never blocks the response)
+    await logAuditEvent({
+      submissionId: submission.id,
+      action: "submission_created",
+      actor: walletAddress,
+      detail: { ipfs_hash: submission.ipfs_hash, latitude, longitude },
+    });
+
+    // 9. Return successful response
     return NextResponse.json(
       {
         id: submission.id,

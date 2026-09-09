@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { corsHeaders, handleOptions } from "@/lib/cors";
+import { logAuditEvent } from "@/lib/audit";
 
 export const maxDuration = 60;
 
@@ -360,7 +361,20 @@ function evaluatePixel(samples) {
       );
     }
 
-    // 7. Return 200 JSON response
+    // 7. Log the audit trail entry (non-critical — never blocks the response)
+    await logAuditEvent({
+      submissionId: submission.id,
+      action: decisionStatus === "verified" ? "verification_passed" : "verification_failed",
+      actor: "system",
+      detail: {
+        ndvi_score,
+        photo_confidence,
+        reasoning,
+        verification_status: verificationStatus,
+      },
+    });
+
+    // 8. Return 200 JSON response
     return NextResponse.json(
       {
         status: decisionStatus,
