@@ -67,11 +67,11 @@ export async function POST(
           const tokenData = await tokenRes.json();
           const accessToken = tokenData.access_token;
 
-          // Step 2b: Bounding box calculation (~50m buffer)
+          // Step 2b: Bounding box calculation (~500m buffer)
           const lat = submission.latitude;
           const lng = submission.longitude;
-          const bufferDegLat = 0.00045; // ~50m
-          const bufferDegLng = 0.00045 / Math.max(0.01, Math.cos((lat * Math.PI) / 180));
+          const bufferDegLat = 0.0045; // ~500m
+          const bufferDegLng = bufferDegLat / Math.max(0.01, Math.cos((lat * Math.PI) / 180));
 
           const minLng = Number((lng - bufferDegLng).toFixed(6));
           const minLat = Number((lat - bufferDegLat).toFixed(6));
@@ -79,7 +79,7 @@ export async function POST(
           const maxLat = Number((lat + bufferDegLat).toFixed(6));
 
           const now = new Date();
-          const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          const ninetyDaysAgo = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
 
           const evalscript = `//VERSION=3
 function setup() {
@@ -112,18 +112,18 @@ function evaluatePixel(samples) {
                 {
                   type: "sentinel-2-l2a",
                   dataFilter: {
-                    maxCloudCoverage: 80,
+                    maxCloudCoverage: 30,
                   },
                 },
               ],
             },
             aggregation: {
               timeRange: {
-                from: thirtyDaysAgo.toISOString(),
+                from: ninetyDaysAgo.toISOString(),
                 to: now.toISOString(),
               },
               aggregationInterval: {
-                of: "P30D",
+                of: "P90D",
               },
               evalscript,
             },
